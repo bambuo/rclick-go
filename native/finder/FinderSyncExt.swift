@@ -1,0 +1,431 @@
+//
+//  FinderSyncExt.swift
+//  FinderSyncExt
+//
+//  Created by 李旭 on 2024/4/4.
+//
+
+import AppKit
+import FinderSync
+
+import OSLog
+
+private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "RClick", category: "FinderOpen")
+
+@MainActor
+class FinderSyncExt: FIFinderSync {
+    var myFolderURL = URL(fileURLWithPath: "/Users/")
+    var isHostAppOpen = false
+
+    private let configStore = SharedConfigStore.shared
+    private var tagToRidMap: [Int: String] = [:]
+
+    let messenger = Messenger.shared
+
+    var triggerMenuKind = FIMenuKind.contextualMenuForContainer
+
+    override init() {
+        super.init()
+
+        FIFinderSyncController.default().directoryURLs = [myFolderURL]
+        logger.info("FinderSync() launched from \(Bundle.main.bundlePath as NSString)")
+
+        messenger.on(name: "quit") { _ in
+
+            self.isHostAppOpen = false
+        }
+        messenger.on(name: "running") { payload in
+
+            self.isHostAppOpen = true
+            self.configStore.reload()
+            self.applyPermissionDirs(payload: payload)
+            Task {
+                self.heartBeat()
+            }
+        }
+
+        heartBeat()
+    }
+
+    private func applyPermissionDirs(payload: MessagePayload) {
+        var urls = configStore.current.permissionURLs
+        if urls.isEmpty {
+            urls = payload.target
+                .filter { !$0.isEmpty }
+                .map { URL(fileURLWithPath: $0) }
+        }
+        guard !urls.isEmpty else {
+            logger.warning("no permission dirs, keep observing \(self.myFolderURL.path)")
+            return
+        }
+        FIFinderSyncController.default().directoryURLs = Set(urls)
+        logger.info("sync directories set to \(urls.count) entries")
+    }
+
+    func heartBeat() {
+        logger.warning("start send message -- heartbeat")
+        messenger.sendMessage(name: StorageKey.messageFromFinder, data: MessagePayload(action: .heartbeat))
+    }
+
+    // MARK: - Primary Finder Sync protocol methods
+
+    override func beginObservingDirectory(at url: URL) {
+        // The user is now seeing the container's contents.
+        // If they see it in more than one view at a time, we're only told once.
+        logger.info("beginObservingDirectoryAtURL: \(url.path as NSString)")
+        let dirs = FIFinderSyncController.default().directoryURLs!
+
+        for dir in dirs {
+            logger.notice("Sync directory set to \(dir.path)")
+        }
+    }
+
+    override func endObservingDirectory(at url: URL) {
+        // The user is no longer seeing the container's contents.
+        logger.info("endObservingDirectoryAtURL: \(url.path as NSString)")
+    }
+
+    override func requestBadgeIdentifier(for url: URL) {
+        logger.trace("requestBadgeIdentifierForURL: \(url.path)")
+    }
+
+    // MARK: - Menu and toolbar item support
+
+    override var toolbarItemName: String {
+        return "RClick"
+    }
+
+    override var toolbarItemToolTip: String {
+        return "RClick: Click the toolbar item for a menu."
+    }
+
+    override var toolbarItemImage: NSImage {
+        return NSImage(named: "toolbar") ?? NSImage(systemSymbolName: "square.grid.3x3", accessibilityDescription: "RClick")!
+    }
+
+    override func menu(for menuKind: FIMenuKind) -> NSMenu {
+        // Produce a menu for the extension.
+        triggerMenuKind = menuKind
+        let applicationMenu = NSMenu(title: "RClick")
+        guard isHostAppOpen else {
+            return applicationMenu
+        }
+
+        let config = configStore.reloadIfNeeded()
+        guard isMenuEnabled(for: menuKind, config: config) else {
+            return applicationMenu
+        }
+
+        switch menuKind {
+        //  finder 中没有选中文件或文件夹
+
+        case .toolbarItemMenu, .contextualMenuForItems, .contextualMenuForContainer:
+            createMenuForToolbar(applicationMenu)
+
+        default:
+            logger.warning("not have menuKind ")
+        }
+
+        return applicationMenu
+    }
+
+    private func isMenuEnabled(for menuKind: FIMenuKind, config: SharedConfig) -> Bool {
+        switch menuKind {
+        case .contextualMenuForItems:
+            return config.menu.showForItems
+        case .contextualMenuForContainer:
+            return config.menu.showForContainer
+        case .toolbarItemMenu:
+            return config.menu.showToolbarItem
+        default:
+            return true
+        }
+    }
+
+    @objc func createMenuForToolbar(_ applicationMenu: NSMenu) {
+        for nsmenu in createAppItems() {
+            applicationMenu.addItem(nsmenu)
+        }
+
+        if let fileMenuItem = createFileCreateMenuItem() {
+            applicationMenu.addItem(fileMenuItem)
+        }
+
+        if let commonDirMenuItem = createCommonDirMenuItem() {
+            applicationMenu.addItem(commonDirMenuItem)
+        }
+
+        for item in createQuickCommandMenuItems() {
+            applicationMenu.addItem(item)
+        }
+
+        for item in createActionMenuItems() {
+            applicationMenu.addItem(item)
+        }
+    }
+
+    @objc func createAppItems() -> [NSMenuItem] {
+        var appMenuItems: [NSMenuItem] = []
+//
+        for item in configStore.current.apps {
+            let menuItem = NSMenuItem()
+            menuItem.target = self
+            menuItem.title = String(localized: "Open With \(item.name)")
+            menuItem.action = #selector(appOpen(_:))
+            menuItem.toolTip = "\(item.name)"
+            menuItem.tag = getUniqueTag(for: item.id)
+            menuItem.image = NSWorkspace.shared.icon(forFile: item.url.path)
+            appMenuItems.append(menuItem)
+        }
+        return appMenuItems
+    }
+
+    private func getUniqueTag(for rid: String) -> Int {
+        var newTag = Int.random(in: 1 ... Int.max)
+
+        // 确保生成的 tag 不在已有的 keys 中
+        while tagToRidMap.keys.contains(newTag) {
+            newTag = Int.random(in: 1 ... Int.max)
+        }
+        tagToRidMap[newTag] = rid
+        return newTag
+    }
+
+    @objc func createActionMenuItems() -> [NSMenuItem] {
+        var actionMenuitems: [NSMenuItem] = []
+
+        for item in configStore.current.actions.filter(\.enabled) {
+            let menuItem = NSMenuItem()
+            menuItem.target = self
+            menuItem.title = String(localized: String.LocalizationValue(item.name))
+            menuItem.action = #selector(actioning(_:))
+            menuItem.toolTip = "\(item.name)"
+            menuItem.tag = getUniqueTag(for: item.id)
+            menuItem.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.name)
+                ?? NSImage(systemSymbolName: "questionmark.square.dashed", accessibilityDescription: "unknown")
+
+            actionMenuitems.append(menuItem)
+        }
+        return actionMenuitems
+    }
+
+    // 创建文件菜单容器
+    @objc func createCommonDirMenuItem() -> NSMenuItem? {
+        let commonDirs = configStore.current.commonDirs
+        if commonDirs.isEmpty {
+            logger.warning("没有启用的常用文件夹")
+            return nil
+        }
+        logger.info("开始创建常用文件夹菜单项")
+
+        let menuItem = NSMenuItem()
+        menuItem.title = String(localized: "Favorite Folders")
+        menuItem.image = NSImage(systemSymbolName: "folder.badge.questionmark", accessibilityDescription: "folder.badge.questionmark")
+            ?? NSImage(systemSymbolName: "folder", accessibilityDescription: "folder")
+        let submenu = NSMenu(title: "Favorite Folders submenu")
+
+        for dir in commonDirs {
+            let menuItem = NSMenuItem()
+            menuItem.target = self
+            menuItem.title = dir.name
+            menuItem.action = #selector(openCommonDir(_:))
+            menuItem.toolTip = dir.url.path
+            menuItem.tag = getUniqueTag(for: dir.id)
+            menuItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "folder")
+                ?? NSImage(systemSymbolName: "questionmark.folder", accessibilityDescription: "unknown")
+
+            submenu.addItem(menuItem)
+            logger.info("添加常用文件夹菜单项: \(dir.name)")
+        }
+
+        menuItem.submenu = submenu
+        logger.info("常用文件夹菜单创建完成")
+        return menuItem
+    }
+
+    @MainActor @objc func openCommonDir(_ menuItem: NSMenuItem) {
+        guard let rid = tagToRidMap[menuItem.tag] else {
+            logger.warning("未获取到rid")
+            return
+        }
+        guard let dirItem = configStore.current.commonDirs.first(where: { $0.id == rid }) else {
+            logger.warning("未找到对应的常用文件夹配置，rid: \(rid)")
+            return
+        }
+
+        messenger.sendMessage(name: StorageKey.messageFromFinder, data: MessagePayload(action: .openCommonDirs, target: [dirItem.url.path], rid: dirItem.id))
+        logger.info("已发送打开常用文件夹消息: \(dirItem.name), 路径: \(dirItem.url.path)")
+    }
+
+    @objc func createQuickCommandMenuItems() -> [NSMenuItem] {
+        let enabledCommands = configStore.current.quickCommands.filter(\.enabled)
+        guard !enabledCommands.isEmpty else { return [] }
+
+        let separator = NSMenuItem.separator()
+        var items: [NSMenuItem] = [separator]
+
+        for cmd in enabledCommands {
+            let menuItem = NSMenuItem()
+            menuItem.target = self
+            menuItem.title = String(localized: String.LocalizationValue(cmd.name))
+            menuItem.action = #selector(runQuickCommand(_:))
+            menuItem.tag = getUniqueTag(for: cmd.id)
+            menuItem.image = NSImage(systemSymbolName: cmd.icon, accessibilityDescription: cmd.name)
+            if cmd.dangerous {
+                menuItem.attributedTitle = NSAttributedString(
+                    string: "⚠ \(String(localized: String.LocalizationValue(cmd.name)))",
+                    attributes: [.foregroundColor: NSColor.systemOrange]
+                )
+            }
+            items.append(menuItem)
+        }
+
+        return items
+    }
+
+    @MainActor @objc func runQuickCommand(_ menuItem: NSMenuItem) {
+        guard let rid = tagToRidMap[menuItem.tag] else {
+            logger.warning("not get rid for quick command")
+            return
+        }
+        let target = getTargets(triggerMenuKind)
+        guard !target.isEmpty else {
+            logger.warning("not dir when running quick command")
+            return
+        }
+        messenger.sendMessage(name: StorageKey.messageFromFinder, data: MessagePayload(action: .runQuickCommand, target: target, rid: rid))
+    }
+
+    @objc func createFileCreateMenuItem() -> NSMenuItem? {
+        let enabledFiletypeItems = configStore.current.newFiles.filter(\.enabled)
+        if enabledFiletypeItems.isEmpty {
+            return nil
+        }
+        let menuItem = NSMenuItem()
+        menuItem.title = String(localized: "New File")
+        menuItem.image = NSImage(systemSymbolName: "doc.badge.plus", accessibilityDescription: "doc.badge.plus")
+            ?? NSImage(systemSymbolName: "doc", accessibilityDescription: "doc")
+        let submenu = NSMenu(title: "file create menu")
+        for item in enabledFiletypeItems {
+            let menuItem = NSMenuItem()
+            menuItem.target = self
+            menuItem.title = String(localized: String.LocalizationValue(item.name))
+            menuItem.action = #selector(createFile(_:))
+            menuItem.toolTip = "\(item.name)"
+            menuItem.tag = getUniqueTag(for: item.id)
+
+            if let app = item.openApp {
+                menuItem.image = NSWorkspace.shared.icon(forFile: app.path)
+                menuItem.image?.isTemplate = true
+            } else {
+                if !item.icon.starts(with: "icon-") {
+                    menuItem.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.icon)
+                        ?? NSImage(systemSymbolName: "doc", accessibilityDescription: item.icon)
+                } else {
+                    if let img = NSImage(named: item.icon) {
+                        menuItem.image = img
+                        menuItem.image?.isTemplate = true
+                    }
+                }
+            }
+
+            submenu.addItem(menuItem)
+        }
+        menuItem.submenu = submenu
+        return menuItem
+    }
+
+    @MainActor @objc func createFile(_ menuItem: NSMenuItem) {
+        guard let rid = tagToRidMap[menuItem.tag] else {
+            logger.warning("not get rid for \(menuItem.tag)")
+            return
+        }
+        let url = FIFinderSyncController.default().targetedURL()
+
+        if let target = url?.path() {
+            messenger.sendMessage(name: StorageKey.messageFromFinder, data: MessagePayload(action: .createFile, target: [target], rid: rid))
+        }
+    }
+
+    @MainActor @objc func actioning(_ menuItem: NSMenuItem) {
+        guard let rid = tagToRidMap[menuItem.tag] else {
+            logger.warning("not get rid")
+            return
+        }
+        let target = getTargets(triggerMenuKind)
+        let trigger = getTriggerKind(triggerMenuKind)
+        if target.isEmpty {
+            logger.warning("not dir when actioning")
+            return
+        }
+        logger.info("actioning \(rid) , trigger:\(trigger)")
+        messenger.sendMessage(name: StorageKey.messageFromFinder, data: MessagePayload(action: .performAction, target: target, rid: rid, trigger: trigger))
+    }
+
+    func getTargets(_: FIMenuKind) -> [String] {
+        var target: [String] = []
+
+        switch triggerMenuKind {
+        case FIMenuKind.contextualMenuForItems:
+            if let urls = FIFinderSyncController.default().selectedItemURLs() {
+                for url in urls {
+                    target.append(url.path())
+                }
+            } else {
+                logger.warning("not have selected dirs")
+            }
+
+        case FIMenuKind.toolbarItemMenu:
+            if let urls = FIFinderSyncController.default().selectedItemURLs() {
+                for url in urls {
+                    target.append(url.path())
+                }
+            }
+            if target.isEmpty {
+                if let targetURL = FIFinderSyncController.default().targetedURL() {
+                    target.append(targetURL.path())
+                }
+            }
+
+        default:
+            if let targetURL = FIFinderSyncController.default().targetedURL() {
+                target.append(targetURL.path())
+            }
+        }
+
+        return target
+    }
+
+    @objc func appOpen(_ menuItem: NSMenuItem) {
+        logger.info("appOpen clicked, tag: \(menuItem.tag), title: \(menuItem.title)")
+        guard let rid = self.tagToRidMap[menuItem.tag] else {
+            logger.warning("not get rid for tag: \(menuItem.tag)")
+            return
+        }
+        logger.info("appOpen rid: \(rid)")
+
+        let target: [String] = self.getTargets(self.triggerMenuKind)
+        logger.info("appOpen targets: \(target)")
+        if !target.isEmpty {
+            self.messenger.sendMessage(name: StorageKey.messageFromFinder, data: MessagePayload(action: .openApp, target: target, rid: rid))
+            logger.info("appOpen message sent with rid: \(rid), targets: \(target)")
+        } else {
+            logger.warning("not get target for appOpen")
+        }
+    }
+
+    @objc func getTriggerKind(_ kind: FIMenuKind) -> String {
+        switch kind {
+        case .contextualMenuForItems:
+            return "ctx-items"
+        case .contextualMenuForContainer:
+            return "ctx-container"
+        case .contextualMenuForSidebar:
+            return "ctx-sidebar"
+        case .toolbarItemMenu:
+            return "toolbar"
+        default:
+            return "unknown"
+        }
+    }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "RClick",
+  "slug": "rclick",
+  "identifier": "cn.wflixu.RClick",
+  "version": "3.0.0",
+  "publisher": "wflixu",
+  "icon": "resources/icon.png",
+  "main": "./cmd/rclick",
+  "out": "build",
+  "macos": {
+    "minimumSystemVersion": "15.0",
+    "signingIdentity": "-",
+    "infoPlist": {
+      "LSUIElement": true,
+      "NSHighResolutionCapable": true,
+      "LSApplicationCategoryType": "public.app-category.productivity"
+    }
+  }
+}

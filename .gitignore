@@ -1,0 +1,8 @@
+build/
+dist/
+dist_build/
+native/helper/bin/
+native/finder/bin/
+*.dmg
+*.app
+.DS_Store
