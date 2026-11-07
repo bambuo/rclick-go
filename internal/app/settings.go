@@ -96,7 +96,7 @@ func (a *App) settingsView(c *ui.Context) {
 			})
 			ui.Sidebar(c, &a.settings.section, func() {
 				for _, item := range settingsSections() {
-					ui.SidebarItem(c, item.ID, nil, i18n.T(item.LabelKey))
+					ui.SidebarItem(c, item.ID, settingsIcons[item.ID], i18n.T(item.LabelKey))
 				}
 			}).Grow(1).Label(i18n.T("Settings sections"))
 			ui.Text(c, i18n.T("Saved changes are written to config.json and picked up by the Finder extension.")).
