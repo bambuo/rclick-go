@@ -13,7 +13,7 @@ import (
 )
 
 type settingsState struct {
-	tab          int
+	section      string
 	draft        config.Config
 	dirty        bool
 	status       string
@@ -26,54 +26,132 @@ type settingsState struct {
 	newFileExt    string
 }
 
+type settingsSection struct {
+	ID       string
+	LabelKey string
+	DescKey  string
+}
+
+func settingsSections() []settingsSection {
+	return []settingsSection{
+		{
+			ID:       "general",
+			LabelKey: "General",
+			DescKey:  "Control where RClick appears in Finder and how new files are named.",
+		},
+		{
+			ID:       "apps",
+			LabelKey: "Apps",
+			DescKey:  "Manage the apps in Open With, with their own arguments and environment.",
+		},
+		{
+			ID:       "actions",
+			LabelKey: "Actions",
+			DescKey:  "Choose which file actions appear in the Finder context menu.",
+		},
+		{
+			ID:       "newfiles",
+			LabelKey: "New Files",
+			DescKey:  "Manage the file types offered by New File and their extensions.",
+		},
+		{
+			ID:       "folders",
+			LabelKey: "Folders",
+			DescKey:  "Configure favorite folders and the folders where the RClick menu appears.",
+		},
+		{
+			ID:       "commands",
+			LabelKey: "Commands",
+			DescKey:  "Configure quick commands and whether they ask before running.",
+		},
+	}
+}
+
+func currentSettingsSection(id string) settingsSection {
+	sections := settingsSections()
+	for _, section := range sections {
+		if section.ID == id {
+			return section
+		}
+	}
+	return sections[0]
+}
+
 func (a *App) markDirty() {
 	a.settings.dirty = true
 }
 
 func (a *App) settingsView(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Fill().Padding(18, 18).Gap(12).Children(func() {
-		ui.Row(c).Gap(10).Children(func() {
-			ui.Text(c, "RClick").FontSize(20).Bold()
-			ui.Text(c, i18n.T("Finder context menu")).FontSize(12).TextColor(t.TextMuted)
-			ui.Spacer(c)
-			if ui.Button(c, i18n.T("Revert")).Disabled(!a.settings.dirty).Clicked() {
-				a.revertSettings()
-			}
-			if ui.PrimaryButton(c, i18n.T("Save")).Disabled(!a.settings.dirty).Clicked() {
-				a.saveSettings()
-			}
+	if a.settings.section == "" {
+		a.settings.section = "general"
+	}
+	section := currentSettingsSection(a.settings.section)
+
+	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
+		ui.Column(c).Width(208).Shrink(0).Background(t.Surface).Children(func() {
+			ui.Column(c).Padding(16, 16, 8).Gap(2).Children(func() {
+				ui.Text(c, "RClick").FontSize(17).Bold()
+				ui.Text(c, i18n.T("Finder context menu")).FontSize(11).TextColor(t.TextMuted)
+			})
+			ui.Sidebar(c, &a.settings.section, func() {
+				for _, item := range settingsSections() {
+					ui.SidebarItem(c, item.ID, nil, i18n.T(item.LabelKey))
+				}
+			}).Grow(1).Label(i18n.T("Settings sections"))
+			ui.Text(c, i18n.T("Saved changes are written to config.json and picked up by the Finder extension.")).
+				FontSize(11).TextColor(t.TextMuted).Padding(8, 16, 14)
 		})
 
-		ui.Segmented(c, &a.settings.tab,
-			i18n.T("General"), i18n.T("Apps"), i18n.T("Actions"),
-			i18n.T("New Files"), i18n.T("Folders"), i18n.T("Commands"))
+		ui.Column(c).Grow(1).MinWidth(0).FillHeight().Children(func() {
+			ui.Column(c).Padding(20, 24, 8).Gap(4).Children(func() {
+				ui.Text(c, i18n.T(section.LabelKey)).FontSize(20).Bold()
+				ui.Text(c, i18n.T(section.DescKey)).FontSize(12).TextColor(t.TextMuted)
+			})
 
-		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(14).Children(func() {
-				switch a.settings.tab {
-				case 0:
-					a.generalTab(c)
-				case 1:
-					a.appsTab(c)
-				case 2:
-					a.actionsTab(c)
-				case 3:
-					a.newFilesTab(c)
-				case 4:
-					a.foldersTab(c)
-				case 5:
-					a.commandsTab(c)
+			ui.Scroll(c).Grow(1).Children(func() {
+				ui.Column(c).Padding(0, 24, 18).Gap(12).Children(func() {
+					switch section.ID {
+					case "apps":
+						a.appsTab(c)
+					case "actions":
+						a.actionsTab(c)
+					case "newfiles":
+						a.newFilesTab(c)
+					case "folders":
+						a.foldersTab(c)
+					case "commands":
+						a.commandsTab(c)
+					default:
+						a.generalTab(c)
+					}
+				})
+			})
+
+			status := a.settings.status
+			if status == "" {
+				status = i18n.T("Saved")
+			}
+			ui.Row(c).Padding(10, 24).Gap(8).AlignItems(ui.Center).
+				BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+				if a.settings.dirty {
+					ui.Text(c, i18n.T("Unsaved changes")).FontSize(11).TextColor(t.Accent)
+					if status != i18n.T("Saved") {
+						ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted)
+					}
+				}
+				if !a.settings.dirty || status != i18n.T("Saved") {
+					ui.Text(c, status).FontSize(11).TextColor(t.TextMuted)
+				}
+				ui.Spacer(c)
+				if ui.Button(c, i18n.T("Revert")).Disabled(!a.settings.dirty).Clicked() {
+					a.revertSettings()
+				}
+				if ui.PrimaryButton(c, i18n.T("Save")).Disabled(!a.settings.dirty).Clicked() {
+					a.saveSettings()
 				}
 			})
 		})
-
-		ui.Divider(c)
-		status := a.settings.status
-		if status == "" {
-			status = i18n.T("Saved changes are written to config.json and picked up by the Finder extension.")
-		}
-		ui.Text(c, status).FontSize(11).TextColor(t.TextMuted)
 	})
 }
 
@@ -174,7 +252,7 @@ func (a *App) appsTab(c *ui.Context) {
 		if a.settings.appEnv[key] == nil {
 			a.settings.appEnv[key] = new(string)
 		}
-		ui.Column(c).Gap(8).Padding(12).Background(t.Surface).Radius(10).Children(func() {
+		ui.Column(c).Gap(8).Padding(12, 0).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Row(c).Gap(8).Children(func() {
 				if ui.TextInput(c.Key("app-name-"+key), &application.ItemName).Grow(1).Changed() {
 					a.markDirty()
@@ -232,7 +310,7 @@ func (a *App) actionsTab(c *ui.Context) {
 	for i := range draft.Actions {
 		action := &draft.Actions[i]
 		name := i18n.ActionName(action.ID, action.Name)
-		ui.Row(c).Gap(10).Padding(10, 12).Background(t.Surface).Radius(8).Children(func() {
+		ui.Row(c).Gap(10).Padding(10, 0).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			if ui.Switch(c, &action.Enabled).Label(name).Changed() {
 				a.markDirty()
 			}
@@ -240,7 +318,6 @@ func (a *App) actionsTab(c *ui.Context) {
 				ui.Text(c, name).FontSize(13)
 				ui.Text(c, action.ID).FontSize(11).TextColor(t.TextMuted)
 			})
-			ui.Text(c, action.Icon).FontSize(11).TextColor(t.TextMuted)
 		})
 	}
 }
@@ -260,14 +337,14 @@ func (a *App) newFilesTab(c *ui.Context) {
 	remove := -1
 	for i := range draft.NewFiles {
 		file := &draft.NewFiles[i]
-		ui.Row(c).Gap(10).Padding(10, 12).Background(c.Theme().Surface).Radius(8).Children(func() {
+		ui.Row(c).Gap(10).Padding(10, 0).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 			if ui.Switch(c, &file.Enabled).Label(i18n.NewFileTypeName(file.ID, file.Name)).Changed() {
 				a.markDirty()
 			}
-			if ui.TextInput(c.Key("newfile-name-"+file.ID), &file.Name).Width(160).Changed() {
+			if ui.TextInput(c.Key("newfile-name-"+file.ID), &file.Name).Grow(1).MinWidth(120).Changed() {
 				a.markDirty()
 			}
-			if ui.TextInput(c.Key("newfile-ext-"+file.ID), &file.Ext).Width(90).Changed() {
+			if ui.TextInput(c.Key("newfile-ext-"+file.ID), &file.Ext).Width(100).Changed() {
 				a.markDirty()
 			}
 			ui.Spacer(c)
@@ -284,8 +361,8 @@ func (a *App) newFilesTab(c *ui.Context) {
 	ui.Divider(c)
 	ui.Text(c, i18n.T("Add a template")).FontSize(13).Bold()
 	ui.Row(c).Gap(8).Children(func() {
-		ui.TextInput(c.Key("newfile-new-name"), &a.settings.newFileName).Placeholder(i18n.T("Name")).Width(160)
-		ui.TextInput(c.Key("newfile-new-ext"), &a.settings.newFileExt).Placeholder(i18n.T("Extension")).Width(120)
+		ui.TextInput(c.Key("newfile-new-name"), &a.settings.newFileName).Placeholder(i18n.T("Name")).Grow(1).MinWidth(120)
+		ui.TextInput(c.Key("newfile-new-ext"), &a.settings.newFileExt).Placeholder(i18n.T("Extension")).Width(110)
 		if ui.Button(c, i18n.T("Add")).Clicked() {
 			a.addNewFileType()
 		}
@@ -310,7 +387,7 @@ func (a *App) foldersTab(c *ui.Context) {
 	removeCommon := -1
 	for i := range draft.CommonDirs {
 		dir := &draft.CommonDirs[i]
-		ui.Row(c).Gap(10).Padding(10, 12).Background(t.Surface).Radius(8).Children(func() {
+		ui.Row(c).Gap(10).Padding(10, 0).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			if ui.TextInput(c.Key("dir-name-"+dir.ID), &dir.Name).Grow(1).Changed() {
 				a.markDirty()
 			}
@@ -340,7 +417,7 @@ func (a *App) foldersTab(c *ui.Context) {
 	removeWatched := -1
 	for i := range draft.PermissionDirs {
 		dir := &draft.PermissionDirs[i]
-		ui.Row(c).Gap(10).Padding(10, 12).Background(t.Surface).Radius(8).Children(func() {
+		ui.Row(c).Gap(10).Padding(10, 0).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Text(c, dir.URL).FontSize(12).Grow(1)
 			if ui.Button(c, i18n.T("Remove")).Clicked() {
 				removeWatched = i
@@ -377,7 +454,7 @@ func (a *App) commandsTab(c *ui.Context) {
 			a.settings.commandNames[command.ID] = &name
 		}
 		displayName := *a.settings.commandNames[command.ID]
-		ui.Column(c).Gap(8).Padding(12).Background(t.Surface).Radius(10).Children(func() {
+		ui.Column(c).Gap(8).Padding(12, 0).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Row(c).Gap(10).Children(func() {
 				if ui.Switch(c, &command.Enabled).Label(displayName).Changed() {
 					a.markDirty()

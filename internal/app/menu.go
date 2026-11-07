@@ -59,10 +59,10 @@ func (a *App) rebuildTrayMenu() {
 func (a *App) createSettingsWindow() {
 	a.window = mygo.NewWindow(mygo.WindowOptions{
 		Title:     i18n.T("RClick Settings"),
-		Width:     760,
-		Height:    680,
-		MinWidth:  620,
-		MinHeight: 480,
+		Width:     880,
+		Height:    720,
+		MinWidth:  700,
+		MinHeight: 560,
 		Hidden:    true,
 		Content:   ui.View(a.settingsView),
 	})
