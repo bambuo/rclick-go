@@ -24,6 +24,30 @@ class FinderSyncExt: FIFinderSync {
 
     var triggerMenuKind = FIMenuKind.contextualMenuForContainer
 
+    private var menuIconColor: NSColor {
+        UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" ? .white : .black
+    }
+
+    private func menuImage(_ image: NSImage?) -> NSImage? {
+        guard let image else { return nil }
+        let size = image.size == .zero ? NSSize(width: 16, height: 16) : image.size
+        let tinted = NSImage(size: size)
+        tinted.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: size))
+        NSGraphicsContext.current?.compositingOperation = .sourceAtop
+        menuIconColor.setFill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+        tinted.unlockFocus()
+        tinted.isTemplate = false
+        return tinted
+    }
+
+    private func menuSymbol(_ name: String, fallback: String? = nil) -> NSImage? {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: name)
+            ?? fallback.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: $0) }
+        return menuImage(image)
+    }
+
     override init() {
         super.init()
 
@@ -201,8 +225,7 @@ class FinderSyncExt: FIFinderSync {
             menuItem.action = #selector(actioning(_:))
             menuItem.toolTip = "\(item.name)"
             menuItem.tag = getUniqueTag(for: item.id)
-            menuItem.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.name)
-                ?? NSImage(systemSymbolName: "questionmark.square.dashed", accessibilityDescription: "unknown")
+            menuItem.image = menuSymbol(item.icon, fallback: "questionmark.square.dashed")
 
             actionMenuitems.append(menuItem)
         }
@@ -220,8 +243,7 @@ class FinderSyncExt: FIFinderSync {
 
         let menuItem = NSMenuItem()
         menuItem.title = String(localized: "Favorite Folders")
-        menuItem.image = NSImage(systemSymbolName: "folder.badge.questionmark", accessibilityDescription: "folder.badge.questionmark")
-            ?? NSImage(systemSymbolName: "folder", accessibilityDescription: "folder")
+        menuItem.image = menuSymbol("folder.badge.questionmark", fallback: "folder")
         let submenu = NSMenu(title: "Favorite Folders submenu")
 
         for dir in commonDirs {
@@ -231,8 +253,7 @@ class FinderSyncExt: FIFinderSync {
             menuItem.action = #selector(openCommonDir(_:))
             menuItem.toolTip = dir.url.path
             menuItem.tag = getUniqueTag(for: dir.id)
-            menuItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "folder")
-                ?? NSImage(systemSymbolName: "questionmark.folder", accessibilityDescription: "unknown")
+            menuItem.image = menuSymbol("folder", fallback: "questionmark.folder")
 
             submenu.addItem(menuItem)
             logger.info("添加常用文件夹菜单项: \(dir.name)")
@@ -270,7 +291,7 @@ class FinderSyncExt: FIFinderSync {
             menuItem.title = String(localized: String.LocalizationValue(cmd.name))
             menuItem.action = #selector(runQuickCommand(_:))
             menuItem.tag = getUniqueTag(for: cmd.id)
-            menuItem.image = NSImage(systemSymbolName: cmd.icon, accessibilityDescription: cmd.name)
+            menuItem.image = menuSymbol(cmd.icon)
             if cmd.dangerous {
                 menuItem.attributedTitle = NSAttributedString(
                     string: "⚠ \(String(localized: String.LocalizationValue(cmd.name)))",
@@ -303,8 +324,7 @@ class FinderSyncExt: FIFinderSync {
         }
         let menuItem = NSMenuItem()
         menuItem.title = String(localized: "New File")
-        menuItem.image = NSImage(systemSymbolName: "doc.badge.plus", accessibilityDescription: "doc.badge.plus")
-            ?? NSImage(systemSymbolName: "doc", accessibilityDescription: "doc")
+        menuItem.image = menuSymbol("doc.badge.plus", fallback: "doc")
         let submenu = NSMenu(title: "file create menu")
         for item in enabledFiletypeItems {
             let menuItem = NSMenuItem()
@@ -315,18 +335,11 @@ class FinderSyncExt: FIFinderSync {
             menuItem.tag = getUniqueTag(for: item.id)
 
             if let app = item.openApp {
-                menuItem.image = NSWorkspace.shared.icon(forFile: app.path)
-                menuItem.image?.isTemplate = true
-            } else {
-                if !item.icon.starts(with: "icon-") {
-                    menuItem.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.icon)
-                        ?? NSImage(systemSymbolName: "doc", accessibilityDescription: item.icon)
-                } else {
-                    if let img = NSImage(named: item.icon) {
-                        menuItem.image = img
-                        menuItem.image?.isTemplate = true
-                    }
-                }
+                menuItem.image = menuImage(NSWorkspace.shared.icon(forFile: app.path))
+            } else if !item.icon.starts(with: "icon-") {
+                menuItem.image = menuSymbol(item.icon, fallback: "doc")
+            } else if let img = NSImage(named: item.icon) {
+                menuItem.image = menuImage(img)
             }
 
             submenu.addItem(menuItem)
