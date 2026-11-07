@@ -6,3 +6,4 @@ native/finder/bin/
 *.dmg
 *.app
 .DS_Store
+.openidea/

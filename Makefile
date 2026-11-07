@@ -18,7 +18,7 @@ vet:
 
 helper:
 	mkdir -p native/helper/bin
-	xcrun swiftc -O -swift-version 5 -target arm64-apple-macos15.0 \
+	xcrun swiftc -O -parse-as-library -swift-version 5 -target arm64-apple-macos15.0 \
 		-framework AppKit -o native/helper/bin/RClickHelper \
 		native/helper/RClickHelper.swift
 
